@@ -65,7 +65,7 @@ if __name__ == "__main__":
     parser.add_argument("-m", "--model-dir", required=True, help="Folder model RVC (.pth dan .index)")
     parser.add_argument("-o", "--output", required=True, help="Path file output hasil voice conversion")
     parser.add_argument("-p", "--pitch", type=int, default=0, help="Perubahan pitch (misalnya -1 atau 1)")
-    parser.add_argument("--f0", default="rmvpe", choices=["rmvpe", "mangio-crepe"], help="Algoritma pitch detection")
+    parser.add_argument("--f0", default="rmvpe", choices=["rmvpe", "mangio-crepe", "crepe", "harvest"], help="Algoritma pitch detection")
     parser.add_argument("--index-rate", type=float, default=0.5)
     parser.add_argument("--filter-radius", type=int, default=3)
     parser.add_argument("--rms-mix-rate", type=float, default=0.25)
@@ -86,3 +86,4 @@ if __name__ == "__main__":
         protect=args.protect,
         crepe_hop_length=args.crepe_hop_length
     )
+
