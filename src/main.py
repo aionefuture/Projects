@@ -5,6 +5,8 @@ import json
 import os
 import shlex
 import subprocess
+import requests
+import re
 from contextlib import suppress
 from urllib.parse import urlparse, parse_qs
 
@@ -13,7 +15,6 @@ import librosa
 import numpy as np
 import soundfile as sf
 import sox
-import yt_dlp
 from pedalboard import Pedalboard, Reverb, Compressor, HighpassFilter
 from pedalboard.io import AudioFile
 from pydub import AudioSegment
@@ -60,22 +61,64 @@ def get_youtube_video_id(url, ignore_playlist=True):
     return None
 
 
-def yt_download(link):
-    ydl_opts = {
-        'format': 'bestaudio',
-        'outtmpl': '%(title)s',
-        'nocheckcertificate': True,
-        'ignoreerrors': True,
-        'no_warnings': True,
-        'quiet': True,
-        'extractaudio': True,
-        'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3'}],
-    }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        result = ydl.extract_info(link, download=True)
-        download_path = ydl.prepare_filename(result, outtmpl='%(title)s.mp3')
+PIPED_SERVERS = [
+    "https://pipedapi.kavin.rocks",
+    "https://pipedapi.in.projectsegfau.lt",
+    "https://pipedapi.adminforge.de",
+    "https://pipedapi.syncpundit.io",
+    "https://pipedapi.moomoo.me",
+]
 
-    return download_path
+def sanitize_filename(name):
+    return re.sub(r'[\\/*?:"<>|]', "", name)
+
+
+def yt_download(link):
+    
+    # Extract video ID using your existing function
+    video_id = get_youtube_video_id(link)
+    if not video_id:
+        raise Exception("Tidak dapat mengambil video ID dari URL YouTube.")
+
+    last_error = None
+
+    for server in PIPED_SERVERS:
+        try:
+            api_url = f"{server}/streams/{video_id}"
+            print(f"[Piped] Mencoba server: {api_url}")
+
+            response = requests.get(api_url, timeout=10)
+
+            if response.status_code != 200:
+                raise Exception(f"Status code: {response.status_code}")
+
+            data = response.json()
+
+            title = sanitize_filename(data["title"])
+            output_name = f"{title}.wav"
+
+            # pilih audio terbaik
+            best = max(data["audioStreams"], key=lambda x: x["bitrate"])
+
+            # download audio mentah (biasanya AAC)
+            audio_raw = requests.get(best["url"], timeout=20).content
+
+            temp_path = f"{title}_temp.m4a"
+            with open(temp_path, "wb") as f:
+                f.write(audio_raw)
+
+            # convert ke WAV asli
+            AudioSegment.from_file(temp_path).export(output_name, format="wav")
+            os.remove(temp_path)
+
+            print(f"[Piped] Download sukses → {output_name}")
+            return output_name
+
+        except Exception as e:
+            print(f"[Piped] Gagal server: {server} → {e}")
+            last_error = e
+
+    raise Exception(f"Piped API gagal. Error terakhir: {last_error}")
 
 
 def raise_exception(error_msg, is_webui):
@@ -203,34 +246,14 @@ def voice_change(voice_model, vocals_path, output_path, pitch_change, f0_method,
     gc.collect()
 
 
-def add_audio_effects(audio_path, reverb_rm_size, reverb_wet, reverb_dry, reverb_damping):
-    output_path = f'{os.path.splitext(audio_path)[0]}_mixed.wav'
-
-    # Initialize audio effects plugins
-    board = Pedalboard(
-        [
-            HighpassFilter(),
-            Compressor(ratio=4, threshold_db=-15),
-            Reverb(room_size=reverb_rm_size, dry_level=reverb_dry, wet_level=reverb_wet, damping=reverb_damping)
-         ]
-    )
-
-    with AudioFile(audio_path) as f:
-        with AudioFile(output_path, 'w', f.samplerate, f.num_channels) as o:
-            # Read one second of audio at a time, until the file is empty:
-            while f.tell() < f.frames:
-                chunk = f.read(int(f.samplerate))
-                effected = board(chunk, f.samplerate, reset=False)
-                o.write(effected)
-
-    return output_path
+def add_audio_effects(audio_path, *args, **kwargs):
+    return audio_path
 
 
-def combine_audio(audio_paths, output_path, main_gain, backup_gain, inst_gain, output_format):
-    main_vocal_audio = AudioSegment.from_wav(audio_paths[0]) - 4 + main_gain
-    backup_vocal_audio = AudioSegment.from_wav(audio_paths[1]) - 6 + backup_gain
-    instrumental_audio = AudioSegment.from_wav(audio_paths[2]) - 7 + inst_gain
-    main_vocal_audio.overlay(backup_vocal_audio).overlay(instrumental_audio).export(output_path, format=output_format)
+
+def combine_audio(*args, **kwargs):
+    pass
+
 
 
 def song_cover_pipeline(song_input, voice_model, pitch_change, keep_files,
@@ -290,16 +313,16 @@ def song_cover_pipeline(song_input, voice_model, pitch_change, keep_files,
             display_progress('[~] Converting voice using RVC...', 0.5, is_webui, progress)
             voice_change(voice_model, main_vocals_dereverb_path, ai_vocals_path, pitch_change, f0_method, index_rate, filter_radius, rms_mix_rate, protect, crepe_hop_length, is_webui)
 
-        display_progress('[~] Applying audio effects to Vocals...', 0.8, is_webui, progress)
-        ai_vocals_mixed_path = add_audio_effects(ai_vocals_path, reverb_rm_size, reverb_wet, reverb_dry, reverb_damping)
+        ai_vocals_mixed_path = ai_vocals_path
 
         if pitch_change_all != 0:
             display_progress('[~] Applying overall pitch change', 0.85, is_webui, progress)
             instrumentals_path = pitch_shift(instrumentals_path, pitch_change_all)
             backup_vocals_path = pitch_shift(backup_vocals_path, pitch_change_all)
 
-        display_progress('[~] Combining AI Vocals and Instrumentals...', 0.9, is_webui, progress)
-        combine_audio([ai_vocals_mixed_path, backup_vocals_path, instrumentals_path], ai_cover_path, main_gain, backup_gain, inst_gain, output_format)
+        # display_progress('[~] Combining AI Vocals and Instrumentals...', 0.9, is_webui, progress)
+        ai_cover_path = ai_vocals_mixed_path  # hasil akhir = AI vocals saja
+
 
         if not keep_files:
             display_progress('[~] Removing intermediate audio files...', 0.95, is_webui, progress)
