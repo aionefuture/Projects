@@ -28,7 +28,6 @@ mdxnet_models_dir = os.path.join(BASE_DIR, 'mdxnet_models')
 rvc_models_dir = os.path.join(BASE_DIR, 'rvc_models')
 output_dir = os.path.join(BASE_DIR, 'song_output')
 
-
 def get_youtube_video_id(url, ignore_playlist=True):
     """
     Examples:
@@ -60,7 +59,6 @@ def get_youtube_video_id(url, ignore_playlist=True):
     # returns None for invalid YouTube url
     return None
 
-
 PIPED_SERVERS = [
     "https://pipedapi.kavin.rocks",
     "https://pipedapi.in.projectsegfau.lt",
@@ -71,7 +69,6 @@ PIPED_SERVERS = [
 
 def sanitize_filename(name):
     return re.sub(r'[\\/*?:"<>|]', "", name)
-
 
 def yt_download(link):
     
@@ -120,13 +117,11 @@ def yt_download(link):
 
     raise Exception(f"Piped API gagal. Error terakhir: {last_error}")
 
-
 def raise_exception(error_msg, is_webui):
     if is_webui:
         raise gr.Error(error_msg)
     else:
         raise Exception(error_msg)
-
 
 def get_rvc_model(voice_model, is_webui):
     rvc_model_filename, rvc_index_filename = None, None
@@ -143,7 +138,6 @@ def get_rvc_model(voice_model, is_webui):
         raise_exception(error_msg, is_webui)
 
     return os.path.join(model_dir, rvc_model_filename), os.path.join(model_dir, rvc_index_filename) if rvc_index_filename else ''
-
 
 def get_audio_paths(song_dir):
     orig_song_path = None
@@ -164,7 +158,6 @@ def get_audio_paths(song_dir):
 
     return orig_song_path, instrumentals_path, main_vocals_dereverb_path, backup_vocals_path
 
-
 def convert_to_stereo(audio_path):
     wave, sr = librosa.load(audio_path, mono=False, sr=44100)
 
@@ -177,7 +170,6 @@ def convert_to_stereo(audio_path):
     else:
         return audio_path
 
-
 def pitch_shift(audio_path, pitch_change):
     output_path = f'{os.path.splitext(audio_path)[0]}_p{pitch_change}.wav'
     if not os.path.exists(output_path):
@@ -189,7 +181,6 @@ def pitch_shift(audio_path, pitch_change):
 
     return output_path
 
-
 def get_hash(filepath):
     with open(filepath, 'rb') as f:
         file_hash = hashlib.blake2b()
@@ -198,13 +189,11 @@ def get_hash(filepath):
 
     return file_hash.hexdigest()[:11]
 
-
 def display_progress(message, percent, is_webui, progress=None):
     if is_webui:
         progress(percent, desc=message)
     else:
         print(message)
-
 
 def preprocess_song(song_input, mdx_model_params, song_id, is_webui, input_type, progress=None):
     keep_orig = False
@@ -220,6 +209,19 @@ def preprocess_song(song_input, mdx_model_params, song_id, is_webui, input_type,
 
     song_output_dir = os.path.join(output_dir, song_id)
     orig_song_path = convert_to_stereo(orig_song_path)
+    # =============================
+    # Simpan file asli download
+    # =============================
+    song_archive_dir = "/content/Projects/song"
+    os.makedirs(song_archive_dir, exist_ok=True)
+
+    import shutil
+    dst = os.path.join(song_archive_dir, os.path.basename(orig_song_path))
+
+    # Buat salinan supaya pipeline tetap punya file kerja
+    shutil.copy(orig_song_path, dst)
+
+    print(f"[+] Original song saved at: {dst}")
 
     display_progress('[~] Separating Vocals from Instrumental...', 0.1, is_webui, progress)
     vocals_path, instrumentals_path = run_mdx(mdx_model_params, song_output_dir, os.path.join(mdxnet_models_dir, 'UVR-MDX-NET-Voc_FT.onnx'), orig_song_path, denoise=True, keep_orig=keep_orig)
@@ -232,8 +234,7 @@ def preprocess_song(song_input, mdx_model_params, song_id, is_webui, input_type,
 
     return orig_song_path, vocals_path, instrumentals_path, main_vocals_path, backup_vocals_path, main_vocals_dereverb_path
 
-
-def voice_change(voice_model, vocals_path, output_path, pitch_change, f0_method, index_rate, filter_radius, rms_mix_rate, protect, crepe_hop_length, is_webui):
+def voice_change(voice_model, vocals_path, output_path, pitch_change, f0_mode, index_rate, filter_radius, rms_mix_rate, protect, crepe_hop_length, is_webui):
     rvc_model_path, rvc_index_path = get_rvc_model(voice_model, is_webui)
     device = 'cuda:0'
     config = Config(device, True)
@@ -241,24 +242,21 @@ def voice_change(voice_model, vocals_path, output_path, pitch_change, f0_method,
     cpt, version, net_g, tgt_sr, vc = get_vc(device, config.is_half, config, rvc_model_path)
 
     # convert main vocals
-    rvc_infer(rvc_index_path, index_rate, vocals_path, output_path, pitch_change, f0_method, cpt, version, net_g, filter_radius, tgt_sr, rms_mix_rate, protect, crepe_hop_length, vc, hubert_model)
+    rvc_infer(rvc_index_path, index_rate, vocals_path, output_path, pitch_change, f0_mode, cpt, version, net_g, filter_radius, tgt_sr, rms_mix_rate, protect, crepe_hop_length, vc, hubert_model)
     del hubert_model, cpt
     gc.collect()
 
-
 def add_audio_effects(audio_path, *args, **kwargs):
     return audio_path
-
 
 
 def combine_audio(*args, **kwargs):
     pass
 
 
-
 def song_cover_pipeline(song_input, voice_model, pitch_change, keep_files,
                         is_webui=0, main_gain=0, backup_gain=0, inst_gain=0, index_rate=0.5, filter_radius=3,
-                        rms_mix_rate=0.25, f0_method='rmvpe', crepe_hop_length=128, protect=0.33, pitch_change_all=0,
+                        rms_mix_rate=0.25, f0_mode='rmvpe', crepe_hop_length=128, protect=0.33, pitch_change_all=0,
                         reverb_rm_size=0.15, reverb_wet=0.2, reverb_dry=0.8, reverb_damping=0.7, output_format='mp3',
                         progress=gr.Progress()):
     try:
@@ -306,29 +304,96 @@ def song_cover_pipeline(song_input, voice_model, pitch_change, keep_files,
                 orig_song_path, instrumentals_path, main_vocals_dereverb_path, backup_vocals_path = paths
 
         pitch_change = pitch_change + pitch_change_all
-        ai_vocals_path = os.path.join(song_dir, f'{os.path.splitext(os.path.basename(orig_song_path))[0]}_{voice_model}_p{pitch_change}_i{index_rate}_fr{filter_radius}_rms{rms_mix_rate}_pro{protect}_{f0_method}{"" if f0_method != "mangio-crepe" else f"_{crepe_hop_length}"}.wav')
+        ai_vocals_path = os.path.join(song_dir, f'{os.path.splitext(os.path.basename(orig_song_path))[0]}_{voice_model}_p{pitch_change}_i{index_rate}_fr{filter_radius}_rms{rms_mix_rate}_pro{protect}_{f0_mode}{"" if f0_mode != "mangio-crepe" else f"_{crepe_hop_length}"}.wav')
         ai_cover_path = os.path.join(song_dir, f'{os.path.splitext(os.path.basename(orig_song_path))[0]} ({voice_model} Ver).{output_format}')
 
         if not os.path.exists(ai_vocals_path):
-            display_progress('[~] Converting voice using RVC...', 0.5, is_webui, progress)
-            voice_change(voice_model, main_vocals_dereverb_path, ai_vocals_path, pitch_change, f0_method, index_rate, filter_radius, rms_mix_rate, protect, crepe_hop_length, is_webui)
 
-        ai_vocals_mixed_path = ai_vocals_path
+            # ------- MODE RMVPE -------
+            if f0_mode == "rmvpe":
+                voice_change(
+                    voice_model,
+                    main_vocals_dereverb_path,
+                    ai_vocals_path,
+                    pitch_change,
+                    "rmvpe",
+                    index_rate,
+                    filter_radius,
+                    rms_mix_rate,
+                    protect,
+                    crepe_hop_length,
+                    is_webui
+                )
+
+            # ------- MODE MANGIO -------
+            elif f0_mode == "mangio-crepe":
+                voice_change(
+                    voice_model,
+                    main_vocals_dereverb_path,
+                    ai_vocals_path,
+                    pitch_change,
+                    "mangio-crepe",
+                    index_rate,
+                    filter_radius,
+                    rms_mix_rate,
+                    protect,
+                    crepe_hop_length,
+                    is_webui
+                )
+
+            # ------- MODE BOTH : RMVPE ➜ MANGIO -------
+            elif f0_mode == "both":
+                # 1. RMVPE
+                ai_first = ai_vocals_path.replace(".wav", "_rmvpe.wav")
+                voice_change(
+                    voice_model,
+                    main_vocals_dereverb_path,
+                    ai_first,
+                    pitch_change,
+                    "rmvpe",
+                    index_rate,
+                    filter_radius,
+                    rms_mix_rate,
+                    protect,
+                    crepe_hop_length,
+                    is_webui
+                )
+
+                # 2. Lanjutkan ke Mangio-Crepe
+                ai_second = ai_vocals_path.replace(".wav", "_mangio.wav")
+
+                voice_change(
+                    voice_model,
+                    main_vocals_dereverb_path,
+                    ai_second,
+                    pitch_change,
+                    "mangio-crepe",
+                    index_rate,
+                    filter_radius,
+                    rms_mix_rate,
+                    protect,
+                    crepe_hop_length,
+                    is_webui
+                )
+
+                # final yang dipakai
+                ai_vocals_path = ai_second
 
         if pitch_change_all != 0:
             display_progress('[~] Applying overall pitch change', 0.85, is_webui, progress)
             instrumentals_path = pitch_shift(instrumentals_path, pitch_change_all)
             backup_vocals_path = pitch_shift(backup_vocals_path, pitch_change_all)
 
-        # display_progress('[~] Combining AI Vocals and Instrumentals...', 0.9, is_webui, progress)
-        ai_cover_path = ai_vocals_mixed_path  # hasil akhir = AI vocals saja
-
-
         if not keep_files:
             display_progress('[~] Removing intermediate audio files...', 0.95, is_webui, progress)
-            intermediate_files = [vocals_path, main_vocals_path, ai_vocals_mixed_path]
+            intermediate_files = [vocals_path, main_vocals_path]
+
+            # JANGAN hapus original download file
+            # -> jadi orig_song_path TIDAK dimasukkan ke intermediate_files
+
             if pitch_change_all != 0:
                 intermediate_files += [instrumentals_path, backup_vocals_path]
+
             for file in intermediate_files:
                 if file and os.path.exists(file):
                     os.remove(file)
@@ -337,7 +402,6 @@ def song_cover_pipeline(song_input, voice_model, pitch_change, keep_files,
 
     except Exception as e:
         raise_exception(str(e), is_webui)
-
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Generate a AI cover song in the song_output/id directory.', add_help=True)
@@ -369,10 +433,11 @@ if __name__ == '__main__':
     cover_path = song_cover_pipeline(args.song_input, rvc_dirname, args.pitch_change, args.keep_files,
                                      main_gain=args.main_vol, backup_gain=args.backup_vol, inst_gain=args.inst_vol,
                                      index_rate=args.index_rate, filter_radius=args.filter_radius,
-                                     rms_mix_rate=args.rms_mix_rate, f0_method=args.pitch_detection_algo,
+                                     rms_mix_rate=args.rms_mix_rate, f0_mode=args.pitch_detection_algo,
                                      crepe_hop_length=args.crepe_hop_length, protect=args.protect,
                                      pitch_change_all=args.pitch_change_all,
                                      reverb_rm_size=args.reverb_size, reverb_wet=args.reverb_wetness,
                                      reverb_dry=args.reverb_dryness, reverb_damping=args.reverb_damping,
                                      output_format=args.output_format)
     print(f'[+] Cover generated at {cover_path}')
+
